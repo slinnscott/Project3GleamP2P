@@ -1,329 +1,192 @@
 import argv
+import chord_node
+import gleam/dict
+import gleam/erlang/process
+import gleam/float
 import gleam/int
 import gleam/io
-import gleam/string
+import gleam/list
+import gleam/otp/actor
+import supervisor_node
 
-// Chord protocol implementation using actor model
-
-// Core data types
-pub type NodeId =
-  Int
-
-pub type Key =
-  Int
-
-pub type Value =
-  String
-
-pub type Finger {
-  Finger(start: Int, node: NodeId)
+// Generate unique node IDs for the Chord ring
+pub fn generate_node_ids(num_nodes: Int) -> List(Int) {
+  // Generate evenly distributed IDs around the ring
+  list.range(0, num_nodes - 1)
+  |> list.map(fn(i) {
+    // Distribute nodes evenly around the ring
+    { i * chord_node.ring_size } / num_nodes
+  })
 }
 
-pub type FingerTable =
-  List(Finger)
+// Create chord nodes as actors
+pub fn create_nodes(
+  node_ids: List(Int),
+) -> dict.Dict(Int, process.Subject(chord_node.Message)) {
+  list.fold(node_ids, dict.new(), fn(acc, node_id) {
+    // Create initial state
+    let initial_state = chord_node.new_state(node_id, dict.new())
 
-pub type NodeState {
-  NodeState(
-    id: NodeId,
-    successor: NodeId,
-    predecessor: NodeId,
-    finger_table: FingerTable,
-    keys: List(#(Key, Value)),
-    m: Int,
-    // number of bits for identifiers
-  )
-}
-
-// Chord algorithm implementations
-pub fn find_successor(state: NodeState, key: Key) -> NodeId {
-  case is_between(state.id, key, state.successor, True) {
-    True -> state.successor
-    False -> {
-      let _closest = closest_preceding_finger(state, key)
-      // In a real implementation, this would send a message to the closest node
-      // For now, we'll return the successor as a fallback
-      state.successor
-    }
-  }
-}
-
-pub fn find_predecessor(state: NodeState, key: Key) -> NodeId {
-  case is_between(state.predecessor, key, state.id, False) {
-    True -> state.predecessor
-    False -> {
-      // In a real implementation, this would send a message to find the predecessor
-      state.id
-    }
-  }
-}
-
-pub fn closest_preceding_finger(state: NodeState, key: Key) -> NodeId {
-  closest_rec(state.finger_table, state.id, key)
-}
-
-fn closest_rec(fingers: List(Finger), best: NodeId, key: Key) -> NodeId {
-  case fingers {
-    [] -> best
-    [Finger(_start, node), ..rest] -> {
-      case is_between(best, node, key, False) {
-        True -> closest_rec(rest, node, key)
-        False -> closest_rec(rest, best, key)
+    // Start the actor using builder pattern
+    case
+      actor.new(initial_state)
+      |> actor.on_message(chord_node.handle_message)
+      |> actor.start()
+    {
+      Ok(started) -> {
+        dict.insert(acc, node_id, started.data)
+      }
+      Error(_) -> {
+        io.println("Error starting node " <> int.to_string(node_id))
+        acc
       }
     }
-  }
+  })
 }
 
-pub fn is_between(start: Int, middle: Int, end: Int, inclusive: Bool) -> Bool {
-  case start < end, inclusive {
-    True, True -> start < middle && middle <= end
-    True, False -> start < middle && middle < end
-    False, True -> start < middle || middle <= end
-    False, False -> start < middle || middle < end
-  }
-}
-
-pub fn create_finger_table(node_id: NodeId, m: Int) -> FingerTable {
-  create_fingers(m, [], node_id, m)
-}
-
-fn create_fingers(
-  i: Int,
-  acc: List(Finger),
-  node_id: NodeId,
-  m: Int,
-) -> List(Finger) {
-  case i {
-    0 -> acc
-    _ -> {
-      let power_2_i_minus_1 = power_of_2(i - 1)
-      let power_2_m = power_of_2(m)
-      let start = case int.remainder(node_id + power_2_i_minus_1, power_2_m) {
-        Ok(value) -> value
-        Error(_) -> 0
-      }
-      create_fingers(i - 1, [Finger(start, node_id), ..acc], node_id, m)
-    }
-  }
-}
-
-fn power_of_2(n: Int) -> Int {
-  case n {
-    0 -> 1
-    1 -> 2
-    2 -> 4
-    3 -> 8
-    4 -> 16
-    5 -> 32
-    6 -> 64
-    7 -> 128
-    8 -> 256
-    9 -> 512
-    10 -> 1024
-    11 -> 2048
-    12 -> 4096
-    13 -> 8192
-    14 -> 16_384
-    15 -> 32_768
-    16 -> 65_536
-    17 -> 131_072
-    18 -> 262_144
-    19 -> 524_288
-    20 -> 1_048_576
-    21 -> 2_097_152
-    22 -> 4_194_304
-    23 -> 8_388_608
-    24 -> 16_777_216
-    25 -> 33_554_432
-    26 -> 67_108_864
-    27 -> 134_217_728
-    28 -> 268_435_456
-    29 -> 536_870_912
-    30 -> 1_073_741_824
-    31 -> 2_147_483_648
-    32 -> 4_294_967_296
-    _ -> 1
-  }
-}
-
-// Simple node implementation for testing
-pub fn create_node(id: NodeId, m: Int) -> NodeState {
-  NodeState(
-    id: id,
-    successor: id,
-    predecessor: id,
-    finger_table: create_finger_table(id, m),
-    keys: [],
-    m: m,
-  )
-}
-
-// Simulate a simple Chord ring for testing
+// Simulate the Chord protocol
 pub fn simulate_chord_ring(num_nodes: Int, num_requests: Int) -> Nil {
-  let m = 32
-  let nodes = create_test_nodes(num_nodes, m)
-  let total_hops = simulate_requests(nodes, num_requests, m)
-  let average_hops =
-    int.to_float(total_hops) /. int.to_float(num_requests * num_nodes)
+  io.println("\n=== Chord Protocol Simulation ===")
+  io.println("Nodes: " <> int.to_string(num_nodes))
+  io.println("Requests per node: " <> int.to_string(num_requests))
+  io.println("Ring size: " <> int.to_string(chord_node.ring_size))
+  io.println("")
 
-  io.println("Chord P2P Protocol Simulation Results:")
-  io.println("Number of nodes: " <> int.to_string(num_nodes))
-  io.println("Number of requests per node: " <> int.to_string(num_requests))
-  io.println("Total requests: " <> int.to_string(num_requests * num_nodes))
-  io.println("Total hops: " <> int.to_string(total_hops))
-  io.println("Average hops per request: " <> string.inspect(average_hops))
-}
+  // Generate node IDs
+  io.println("Generating node IDs...")
+  let node_ids = generate_node_ids(num_nodes)
 
-fn create_test_nodes(num_nodes: Int, m: Int) -> List(NodeState) {
-  create_nodes(num_nodes, [], m)
-}
+  // Create nodes
+  io.println("Creating chord nodes...")
+  let nodes = create_nodes(node_ids)
 
-fn create_nodes(i: Int, acc: List(NodeState), m: Int) -> List(NodeState) {
-  case i {
-    0 -> acc
-    _ -> {
-      let power_2_m = power_of_2(m)
-      let node_id = case int.remainder(i * 1000, power_2_m) {
-        Ok(value) -> value
-        Error(_) -> 0
-      }
-      let node = create_node(node_id, m)
-      create_nodes(i - 1, [node, ..acc], m)
-    }
-  }
-}
-
-fn simulate_requests(nodes: List(NodeState), num_requests: Int, m: Int) -> Int {
-  simulate_all_nodes(nodes, 0, num_requests, m)
-}
-
-fn simulate_node_requests(
-  node: NodeState,
-  remaining_requests: Int,
-  total_hops: Int,
-  m: Int,
-  all_nodes: List(NodeState),
-) -> Int {
-  case remaining_requests {
-    0 -> total_hops
-    _ -> {
-      let power_2_m = power_of_2(m)
-      let key = case int.remainder(remaining_requests * 500, power_2_m) {
-        Ok(value) -> value
-        Error(_) -> 0
-      }
-      let hops = simulate_key_lookup(node, key, all_nodes)
-      simulate_node_requests(
-        node,
-        remaining_requests - 1,
-        total_hops + hops,
-        m,
-        all_nodes,
+  case dict.size(nodes) == num_nodes {
+    True -> {
+      io.println(
+        "Successfully created " <> int.to_string(num_nodes) <> " nodes",
       )
+
+      // Create supervisor
+      io.println("Creating supervisor...")
+      let supervisor_state = supervisor_node.SupervisorState(nodes, num_nodes)
+
+      case
+        actor.new(supervisor_state)
+        |> actor.on_message(supervisor_node.handle_message)
+        |> actor.start()
+      {
+        Ok(started) -> {
+          let supervisor = started.data
+
+          // Initialize all nodes (build finger tables)
+          io.println("Initializing finger tables...")
+          let init_reply = process.new_subject()
+          process.send(supervisor, supervisor_node.InitializeNodes(init_reply))
+
+          // Wait for initialization to complete
+          case process.receive(init_reply, 90_000) {
+            Ok(supervisor_node.InitComplete) -> {
+              io.println("Finger tables initialized")
+              io.println("")
+
+              // Start simulation
+              io.println("Performing lookups...")
+              let sim_reply = process.new_subject()
+              process.send(
+                supervisor,
+                supervisor_node.StartSimulation(
+                  node_ids,
+                  num_requests,
+                  sim_reply,
+                ),
+              )
+
+              // Wait for simulation to complete
+              case process.receive(sim_reply, 180_000) {
+                Ok(supervisor_node.SimulationComplete(
+                  total_requests,
+                  successful,
+                  total_hops,
+                  duration_ms,
+                )) -> {
+                  print_results(
+                    total_requests,
+                    successful,
+                    total_hops,
+                    duration_ms,
+                    num_nodes,
+                  )
+                }
+                Ok(supervisor_node.SimulationFailed(reason)) -> {
+                  io.println("Simulation failed: " <> reason)
+                }
+                Error(_) -> {
+                  io.println("Timeout waiting for simulation to complete")
+                }
+              }
+
+              // Cleanup
+              process.send(supervisor, supervisor_node.Shutdown)
+            }
+            Ok(supervisor_node.InitFailed(reason)) -> {
+              io.println("Initialization failed: " <> reason)
+            }
+            Error(_) -> {
+              io.println("Timeout waiting for initialization")
+            }
+          }
+        }
+        Error(_) -> {
+          io.println("Error: Failed to start supervisor")
+        }
+      }
+    }
+    False -> {
+      io.println("Error: Failed to create all nodes")
     }
   }
 }
 
-fn simulate_all_nodes(
-  nodes: List(NodeState),
+// Print simulation results
+fn print_results(
+  total_requests: Int,
+  successful_lookups: Int,
   total_hops: Int,
-  num_requests: Int,
-  m: Int,
-) -> Int {
-  case nodes {
-    [] -> total_hops
-    [node, ..rest] -> {
-      let node_hops = simulate_node_requests(node, num_requests, 0, m, nodes)
-      simulate_all_nodes(rest, total_hops + node_hops, num_requests, m)
-    }
+  duration_ms: Int,
+  num_nodes: Int,
+) -> Nil {
+  // Calculate statistics
+  let avg_hops = case successful_lookups > 0 {
+    True -> int.to_float(total_hops) /. int.to_float(successful_lookups)
+    False -> 0.0
   }
+
+  // Theoretical average hops for Chord is O(log N)
+  let theoretical_hops = calculate_log2(num_nodes)
+
+  // Print results
+  io.println("\n=== Results ===")
+  io.println("Total requests: " <> int.to_string(total_requests))
+  io.println("Successful lookups: " <> int.to_string(successful_lookups))
+  io.println("Total time: " <> int.to_string(duration_ms) <> " ms")
+  io.println("Average hops: " <> float.to_string(avg_hops))
+  io.println("Theoretical hops (log2 N): " <> float.to_string(theoretical_hops))
+  io.println("")
+
+  // Show that the protocol scales logarithmically
+  case avg_hops <=. theoretical_hops *. 1.5 {
+    True -> io.println("✓ Performance scales logarithmically with network size")
+    False -> io.println("⚠ Performance may not be optimal")
+  }
+
+  io.println("Simulation complete.")
 }
 
-fn simulate_key_lookup(
-  start_node: NodeState,
-  key: Key,
-  all_nodes: List(NodeState),
-) -> Int {
-  // Simple simulation: count hops based on the distance in the identifier space
-  let target_node = find_node_for_key(key, all_nodes)
-  let distance = calculate_distance(start_node.id, target_node.id)
-
-  // Estimate hops as log2 of the distance (simplified Chord behavior)
-  case distance {
-    0 -> 0
-    _ -> int.max(1, log2_approx(distance))
-  }
-}
-
-fn log2_approx(n: Int) -> Int {
+// Calculate log2 of a number
+fn calculate_log2(n: Int) -> Float {
   case n {
-    0 -> 0
-    1 -> 0
-    2 -> 1
-    4 -> 2
-    8 -> 3
-    16 -> 4
-    32 -> 5
-    64 -> 6
-    128 -> 7
-    256 -> 8
-    512 -> 9
-    1024 -> 10
-    2048 -> 11
-    4096 -> 12
-    8192 -> 13
-    16_384 -> 14
-    32_768 -> 15
-    65_536 -> 16
-    131_072 -> 17
-    262_144 -> 18
-    524_288 -> 19
-    1_048_576 -> 20
-    2_097_152 -> 21
-    4_194_304 -> 22
-    8_388_608 -> 23
-    16_777_216 -> 24
-    33_554_432 -> 25
-    67_108_864 -> 26
-    134_217_728 -> 27
-    268_435_456 -> 28
-    536_870_912 -> 29
-    1_073_741_824 -> 30
-    2_147_483_648 -> 31
-    _ -> 32
-  }
-}
-
-fn find_node_for_key(key: Key, nodes: List(NodeState)) -> NodeState {
-  case nodes {
-    [] ->
-      NodeState(
-        id: 0,
-        successor: 0,
-        predecessor: 0,
-        finger_table: [],
-        keys: [],
-        m: 32,
-      )
-    [first, ..rest] -> find_closest(rest, first, key)
-  }
-}
-
-fn find_closest(nodes: List(NodeState), best: NodeState, key: Key) -> NodeState {
-  case nodes {
-    [] -> best
-    [node, ..rest] -> {
-      case is_between(best.id, key, node.id, True) {
-        True -> find_closest(rest, node, key)
-        False -> find_closest(rest, best, key)
-      }
-    }
-  }
-}
-
-fn calculate_distance(start: Int, end: Int) -> Int {
-  case start <= end {
-    True -> end - start
-    False -> { power_of_2(32) - start } + end
+    1 -> 0.0
+    _ -> 1.0 +. calculate_log2(n / 2)
   }
 }
 
@@ -336,7 +199,14 @@ pub fn main() -> Nil {
         [num_nodes_str, num_requests_str] -> {
           case int.parse(num_nodes_str), int.parse(num_requests_str) {
             Ok(num_nodes), Ok(num_requests) -> {
-              simulate_chord_ring(num_nodes, num_requests)
+              // Validate inputs
+              case num_nodes > 0 && num_requests > 0 {
+                True -> simulate_chord_ring(num_nodes, num_requests)
+                False -> {
+                  io.println("Error: Both arguments must be positive integers")
+                  io.println("Usage: gleam run numNodes numRequests")
+                }
+              }
             }
             _, _ -> {
               io.println(
