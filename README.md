@@ -8,6 +8,7 @@ We believe the chord algorithm is working as expected. The network initializes s
 
 ## Largest Network Size Achieved
 The largest network size succefully tested contains 5000 nodes; this is a reduction in node count from prior projects, primarily due to a change in testing device with lower overall memory. Protocol performance remains consistent throughout, however.
+
 <img width="571" height="456" alt="Screenshot 2025-10-09 at 12 08 19 AM" src="https://github.com/user-attachments/assets/d373c6aa-18cd-4b5d-aa42-96c606aa08b5" />
 
 <img width="866" height="565" alt="image" src="https://github.com/user-attachments/assets/16ef5c45-1b5a-4c9a-82a6-fe18367b2f91" />
